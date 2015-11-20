@@ -1,0 +1,242 @@
+---
+title: "Countries of refugees to the US in 2014 and their destinations"
+output: 
+  html_document: 
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,eval=FALSE)
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(d3heatmap)#if (!require("d3heatmap")) #devtools::install_github("rstudio/d3heatmap")
+library(htmlwidgets)
+library(networkD3)#devtools::install_github("christophergandrud/networkd3")
+library(rCharts)
+library(magrittr)
+library(rcdimple)
+library(rgdal)
+library(leaflet)
+library(countrycode)
+```
+A [tweet from Kyle Walker](https://twitter.com/kyle_e_walker/status/641826147446099968) introduced me to data from the [Office of Refugee Resettlement from the US Department of Health and Human Services.](http://www.acf.hhs.gov/programs/orr/resource/fiscal-year-2014-refugee-arrivals) Using multiple R packages such as shiny, rCharts, rcdimple, leaflet, and d3heatmap, this post looks at the countries of 69,986 refugees in 2014 and their destinations in the US. All charts are interactive and the code for generating them and the shiny apps can be found in the [Refugees repository in my account on GitHub.](https://github.com/patilv/Refugees) 
+
+# Countries of Refugees
+```{r}
+ref <- read_excel('fy14_arrivals_by_state_nationality.xls', skip = 1)
+names(ref)[1] <- "State"
+ref=ref[1:49,-2]
+row.names(ref)=ref$State
+row.names(ref)
+row.names(ref)=ref$State
+row.names(ref)
+
+reflong=ref%>%gather(Country,Number,c(2:80))%>%filter(Number>0)
+reflong$Country=as.character(reflong$Country)
+save(reflong,file="reflong.Rda")
+
+Countrydf=reflong%>%group_by(Country)%>%summarize(Refugees=sum(Number))
+Statesdf=reflong%>%group_by(State)%>%summarize(Refugees=sum(Number))
+
+#df=Countrydf[order(-Countrydf$Refugees),]
+countrydimple=dimple(
+  Refugees ~ Country,
+  data = Countrydf,
+  type = "bubble",bounds = list(x=90,y=30,width=800,height=330))%>%
+    yAxis(type = "addMeasureAxis", outputFormat = ',.0f') %>%default_colors(rainbow(4))
+saveWidget(countrydimple,file = "countrydimple.html",selfcontained = TRUE)
+
+```
+Refugees from 78 countries came to the US. (The country of one person is not known.) As the following interactive chart suggests, most refugees came to the US from very few countries. 
+<iframe width="1000" height="650" src="countrydimple.html" frameborder="0"> </iframe>
+```{r}
+# Remove the unknown country.
+countryleaf=Countrydf[-74,]
+
+countryleaf$iso_a3=as.factor(countrycode(countryleaf$Country,"country.name","iso3c"))
+#Palestine 158 refugees and West Bank 1 refugee have iso_a3 of PSE
+countryleaf=countryleaf[countryleaf$iso_a3!="PSE",]
+countryleaf=rbind(countryleaf,data.frame(Country="PALESTINE AND WEST BANK",Refugees=158,iso_a3="PSE"))
+countryleaf=data.frame(countryleaf)
+# We download the data for the map from naturalearthdata.com
+url <- "http://www.naturalearthdata.com/http//www.naturalearthdata.com/download/50m/cultural/ne_50m_admin_0_countries.zip"
+folder <- getwd() #set a folder where to download and extract the data
+file <- basename(url) 
+ download.file(url, file)
+ unzip(file, exdir = folder)
+
+#And read it with rgdal library
+world <- readOGR(dsn = folder, 
+                 layer = "ne_50m_admin_0_countries",
+                 encoding = "UTF-8",
+                 verbose = FALSE)
+
+
+countryleaf=data.frame(countryleaf)
+
+#world <- sp::merge(world,countryleaf, by="iso_a3")
+world <- merge(world, countryleaf,
+               by.x = "iso_a3",
+               by.y = "iso_a3",
+               sort = FALSE)
+#world@data$iso_a3
+#Colour palette. Check ?colorQuantile and ?RColorBrewer for more options
+pal <- colorNumeric(
+  palette = "Reds", #Blues",
+  domain = Countrydf$Refugees
+  )
+
+#Pop up: The info displayed when click on a country
+world_popup <- paste0(world$admin, 
+                       
+                      ", Refugees:", 
+                       
+                      world$Refugees)
+
+
+#Tiles coming from stamen.com
+tiles <- "http://{s}.tile.stamen.com/toner-lite/{z}/{x}/{y}.png"
+attribution <- 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, under <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a>. Map data by <a href="http://www.naturalearthdata.com/">Natural Earth</a>.'
+
+#And finally the map:
+countryleaflet=leaflet(data = world) %>% 
+  addTiles(urlTemplate = tiles,  
+         attribution = attribution) %>%
+  setView(0, 0, zoom = 2) %>%
+  addPolygons(fillColor = ~pal(world$Refugees), 
+              fillOpacity = 1, 
+              color = "#000000", 
+              weight = 1, 
+              label=~world_popup)%>%  addLegend("bottomright", pal = pal, values = ~Refugees,
+                                                 title = "Number of Refugees",
+                                                 opacity = 1
+              )
+saveWidget(countryleaflet,file = "countryleaflet.html",selfcontained = TRUE)
+
+```
+<iframe width="1000" height="650" src="countryleaflet.html" frameborder="0"> </iframe>
+
+# Destinations of Refugees in the US
+```{r}
+df=Statesdf
+
+names(df)[1]="Destination"
+statedimple=dimple(
+  Refugees ~ Destination,
+  data = df,
+  type = "bubble",bounds = list(x=90,y=30,width=800,height=330))%>%
+    yAxis(type = "addMeasureAxis", outputFormat = ',.0f') %>%default_colors(rainbow(4))
+saveWidget(statedimple,file = "statedimple.html",selfcontained = TRUE)
+
+```
+Refugees came to 47 states, the District of Columbia, and Peurto Rico. (Delaware, Montana, and Wyoming are missing in that list among the 50 states.) Texas and California accepted the highest number of refugees.
+<iframe width="1000" height="650" src="statedimple.html" frameborder="0"> </iframe>
+```{r}
+# Remove the unknown country.
+countryleaf$iso_a3=as.factor(countrycode(countryleaf$Country,"country.name","iso3c"))
+#Palestine 158 refugees and West Bank 1 refugee have iso_a3 of PSE
+countryleaf=countryleaf[countryleaf$iso_a3!="PSE",]
+countryleaf=rbind(countryleaf,data.frame(Country="PALESTINE AND WEST BANK",Refugees=158,iso_a3="PSE"))
+countryleaf=data.frame(countryleaf)
+# We download the data for the map from naturalearthdata.com
+url <- "http://www2.census.gov/geo/tiger/GENZ2014/shp/cb_2014_us_state_20m.zip"
+folder <- getwd() #set a folder where to download and extract the data
+file <- basename(url) 
+ download.file(url, file)
+ unzip(file, exdir = folder)
+
+#And read it with rgdal library
+states <- readOGR(dsn = folder, 
+                 layer = "cb_2014_us_state_20m",
+                 encoding = "UTF-8",
+                 verbose = FALSE)
+
+states@data$NAME=toupper(states@data$NAME)
+names(Statesdf)[1]="NAME"
+#world <- sp::merge(world,countryleaf, by="iso_a3")
+states <- sp::merge(states, Statesdf,
+               by.x = "NAME",
+               by.y = "NAME",
+               sort = FALSE)
+
+#world@data$iso_a3
+#Colour palette. Check ?colorQuantile and ?RColorBrewer for more options
+pal <- colorNumeric(
+  palette = "Reds", #Blues",
+  domain = Statesdf$Refugees
+  )
+
+#Pop up: The info displayed when click on a country
+state_popup <- paste0(states$NAME, 
+                      ", Refugees:", 
+                      states$Refugees)
+
+
+#Tiles coming from stamen.com
+tiles <- "http://{s}.tile.stamen.com/toner-lite/{z}/{x}/{y}.png"
+attribution <- 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, under <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a>. Map data by <a href="http://www.naturalearthdata.com/">Natural Earth</a>.'
+
+#And finally the map:
+stateleaflet=leaflet(data = states) %>% 
+  addTiles(urlTemplate = tiles,  
+         attribution = attribution) %>%
+  setView(-95, 50, zoom = 3) %>%
+  addPolygons(fillColor = ~pal(states$Refugees), 
+              fillOpacity = 1, 
+              color = "#000000", 
+              weight = 1, 
+              label = ~state_popup)%>%  addLegend("bottomright", pal = pal, values = ~Refugees,
+                                                 title = "Number of Refugees",
+                                                 opacity = 1
+              )
+saveWidget(stateleaflet,file = "stateleaflet.html",selfcontained = TRUE)
+
+```
+<iframe width="1000" height="650" src="stateleaflet.html" frameborder="0"> </iframe>
+
+
+# Linking Countries of Refugees to Destinations in the US
+## One country at a time
+<iframe width="1000" height="1000" src="http://analytics.gonzaga.edu/2014-CountryRefugees/" frameborder="0"> </iframe>
+
+## One destination at a time
+<iframe width="1000" height="1000" src="http://analytics.gonzaga.edu/2014-StateRefugees/" frameborder="0"> </iframe>
+
+## All countries and destinations together
+
+```{r}
+myheatmap=d3heatmap(ref[,-1],scale="column",dendrogram = "none",labRow=row.names(ref),color="Blues")
+saveWidget(myheatmap,file = "heatmap14.html",selfcontained = TRUE)
+```
+The heatmap presents data on how many refugees of different countries arrived in different parts of the US. (Hovering over the map provides details on the country, destination, and number of refugees. The country-of-origin of 1 refugee who went to Connecticut is not known.
+<iframe width="100%" height="800" src="heatmap14.html" frameborder="0"> </iframe>
+```{r}
+# Code copied from Kyle Walker's work 
+vec_country=c(unique(reflong$Country))
+vec_state=c(unique(reflong$State))
+
+name_vec <- c(unique(reflong$Country), unique(reflong$State))
+
+name_df <- data.frame("name" = name_vec, "id" = 0:127)
+
+ref2 <- reflong %>%
+  left_join(name_df, by = c("State" = "name")) %>%
+  rename(state_id  = id) %>%
+  left_join(name_df, by = c("Country" = "name")) %>%
+  rename(country_id = id)
+
+
+sankeyNetwork(Links = ref2, Nodes = name_df, Source = "country_id",
+              Target = "state_id", Value = "Number", NodeID = "name",margin=10,
+              fontSize = 10, nodeWidth = 25,nodePadding = 10, colourScale = JS("d3.scale.category20()"),height=1200,width=850)%>% 
+  saveNetwork(file = 'Sankey2014.html')
+```
+The sankey chart shown below presents yet another way to visualize the migration of refugees from different countries to their destinations in the US. (Hovering over the connections provides details on the country, destination, and number of refugees.) The code for this chart comes from [Kyle Walker's work on displaying part of these data.](http://rpubs.com/walkerke/refugee_sankey) 
+
+<iframe width="100%" height="1400" src="Sankey2014.html" frameborder="0"> </iframe>
+
+
+
+
+
